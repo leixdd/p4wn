@@ -8,6 +8,11 @@ forms that are easier to understand and work with.
 A pure-Go PDF→PNG/HTML rendering service: a from-scratch PDF renderer exposed
 as an async HTTP API and a CLI.
 
+p4wn aims to convert any source material in the future. Today it only supports:
+
+1. PDF → PNG
+2. PDF → HTML
+
 ## What it renders
 
 - **File structure**: classic xref tables, xref streams, object streams,
