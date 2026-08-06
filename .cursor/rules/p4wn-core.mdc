@@ -1,0 +1,33 @@
+---
+description: Core p4wn identity, stance, and hard constraints for every session
+alwaysApply: true
+---
+
+# p4wn core
+
+p4wn converts PDFs into PNG/HTML so specs and source material are easier to
+understand. Readable conversion is the north star—not a full PDF product.
+
+## Names
+
+- Module: `p4wn` (code under `go-app-api/`)
+- Binaries: `p4wn`, `p4wn-server`
+- Run commands from the **repo root** (`go.work`)
+
+## Stance
+
+- `api/`, `cmd/`, docs, `testtools/`: change when the task asks
+- `internal/*`: small, test-backed fixes only unless the user asks for fidelity
+  or architecture work
+- Known degradations in `go-app-api/README.md` stay known unless asked to fix
+- Prefer fixtures under `testdata/` over ad-hoc scripts
+- Keep diffs scoped to the request
+
+## Hard rules
+
+- Do not commit `data/` job artifacts
+- Do not introduce Node/npm
+- After Go changes: run relevant `go test p4wn/...`
+- Visual changes: regenerate goldens only with `-update` and only intentionally
+- Point to `AGENTS.md` and `go-app-api/README.md` for architecture depth—do not
+  invent parallel design docs in chat

@@ -1,0 +1,5 @@
+#!/bin/sh
+# Remove LLM Co-Authored-By trailers as soon as the message is prepared.
+# $1 = path to commit message file
+dir=$(python3 -c 'import os,sys; print(os.path.dirname(os.path.realpath(sys.argv[1])))' "$0")
+exec "$dir/strip-llm-coauthors.sh" "$1"

@@ -1,0 +1,35 @@
+---
+description: Golden, fuzz, and fixture discipline for p4wn tests
+globs: "**/*_test.go,testdata/**"
+alwaysApply: false
+---
+
+# Testing
+
+## Commands (from repo root)
+
+```sh
+go test p4wn/...
+go test p4wn/internal/content -run TestGolden -update
+go test p4wn/internal/pdf -fuzz FuzzOpen
+go test p4wn/internal/filter -fuzz FuzzDecode
+```
+
+## Goldens
+
+- Live in `testdata/golden/`; inputs in `testdata/pdfs/`
+- Failing goldens mean investigate render output—do not “fix” by rewriting
+  unless the new pixels/HTML are verified correct
+- Use `-update` only when intentionally accepting a new baseline
+- Prefer adding a fixture PDF over one-off local-only test files
+
+## Fuzz
+
+- Touching `pdf` parsers/xref/decrypt → consider `FuzzOpen`
+- Touching `filter` decoders/predictors → consider `FuzzDecode`
+
+## Fixtures
+
+- Generators: `testtools/genimg`, `gentext`, `genjp`
+- Keep fixtures small and purposeful
+- Do not commit runtime output from `data/`

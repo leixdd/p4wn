@@ -1,0 +1,38 @@
+---
+description: Package boundaries and Device seam for the Go PDF renderer
+globs: go-app-api/internal/**/*.go
+alwaysApply: false
+---
+
+# Go renderer internals
+
+## Package roles
+
+| Package | Responsibility |
+|---------|----------------|
+| `pdf` | Objects, lexer/parser, xref/repair, decrypt, page tree |
+| `filter` | Stream decode + predictors |
+| `graphics` | Matrices, rects, paths, colorspaces, pixmaps |
+| `font` | Embedded fonts, encodings, ToUnicode, base-14 |
+| `content` | Content-stream interpreter, images, HTML assembly |
+| `render` | `Device`, `DrawDevice` (PNG), `HTMLDevice` (SVG/HTML) |
+
+## Device seam
+
+`content` must call rendering only through `render.Device`.
+
+```
+interpreter → Device.FillPath / StrokePath / FillText / FillImage / …
+                ├─ DrawDevice → raster → PNG
+                └─ HTMLDevice → SVG fragments → document.html
+```
+
+- Do not bypass `Device` with direct raster or SVG writes from `content`
+- Prefer extending `BaseDevice` / existing devices over new parallel pipelines
+- Do not casually rewrite the scanline rasterizer, stroker, or flatten path
+
+## Change hygiene
+
+- Touch the smallest package that owns the bug
+- Match existing style; run `gofmt`
+- Pair behavior changes with tests in the owning package when practical
