@@ -1,0 +1,47 @@
+%PDF-1.7
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 500] >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>
+endobj
+4 0 obj
+<< >>
+stream
+% solid red rect
+1 0 0 rg 20 430 80 50 re f
+% green ellipse-ish bezier blob
+0 0.7 0.2 rg
+150 455 m 150 480 190 480 190 455 c 190 430 150 430 150 455 c f
+% blue thick stroke, round join+cap zigzag
+0 0 1 RG 12 w 1 J 1 j
+240 440 m 280 490 l 320 440 l 360 490 l S
+% self-intersecting star: nonzero (filled solid)
+0.9 0.5 0 rg
+60 320 m 110 420 l 160 320 l 10 385 l 210 385 l h f
+% same star even-odd (hole in middle)
+0.2 0.2 0.9 rg
+260 320 m 310 420 l 360 320 l 210 385 l 410 385 l h f*
+% miter vs bevel joins, thick
+0 g 14 w 0 J 0 j
+40 220 m 80 290 l 120 220 l S
+2 j
+160 220 m 200 290 l 240 220 l S
+% dashes
+0.8 0 0.4 RG 6 w [12 8] 0 d 1 J
+30 170 m 370 170 l S
+% dashed curve
+0 0.5 0.8 RG 4 w [10 6] 3 d
+30 100 m 120 160 280 40 370 120 c S
+% cmyk fill + gray fill + clip test
+0.9 0 0.9 0 k 30 20 100 50 re f
+0.5 g 150 20 100 50 re f
+q 280 20 80 50 re W n 1 0 0 rg 260 0 200 100 re f Q
+endstream
+endobj
+trailer
+<< /Size 5 /Root 1 0 R >>
+%%EOF

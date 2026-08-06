@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>p4wn API tester</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+  h1 { font-size: 1.3rem; }
+  fieldset { border: 1px solid #ccc; border-radius: 6px; margin-bottom: 1rem; }
+  label { display: inline-block; margin-right: 1rem; }
+  input[type=number], input[type=text] { width: 6rem; }
+  select { padding: .2rem .4rem; }
+  button { cursor: pointer; padding: .35rem .7rem; border: 1px solid #888; border-radius: 5px; background: #f5f5f5; }
+  button:disabled { opacity: .5; cursor: default; }
+  #status { white-space: pre-wrap; font-family: ui-monospace, monospace; background: #f7f7f7; padding: .6rem; border-radius: 5px; min-height: 1.4em; }
+  .err { color: #b00; }
+  .pages { display: flex; flex-wrap: wrap; gap: .8rem; margin-top: 1rem; }
+  .page { border: 1px solid #ddd; border-radius: 5px; padding: .4rem; text-align: center; font-size: 12px; }
+  .page img { display: block; max-width: 240px; height: auto; background: repeating-conic-gradient(#eee 0% 25%, #fff 0% 50%) 50%/16px 16px; }
+  #htmlframe { width: 100%; height: 70vh; border: 1px solid #ddd; border-radius: 5px; margin-top: 1rem; background: #fff; }
+  .bar { display: flex; gap: .5rem; align-items: center; margin: .5rem 0; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<h1>p4wn API tester</h1>
+<p>Talks to the API through this page's own origin (a reverse proxy), so it exercises the real routes without CORS. <button id="ping">GET /healthz</button> <span id="health"></span></p>
+
+<form id="form">
+  <fieldset>
+    <legend>POST /v1/jobs</legend>
+    <div class="bar"><label>PDF file <input type="file" name="file" accept="application/pdf" required></label></div>
+    <div class="bar">
+      <label>format
+        <select name="format">
+          <option value="png" selected>png</option>
+          <option value="html">html</option>
+        </select>
+      </label>
+      <label>dpi <input type="number" name="dpi" value="150" min="8" max="1200"></label>
+      <label>pages <input type="text" name="pages" placeholder="all, e.g. 1-3,7"></label>
+      <label><input type="checkbox" name="gray"> gray</label>
+      <label><input type="checkbox" name="alpha"> alpha</label>
+    </div>
+    <button type="submit">Submit job</button>
+  </fieldset>
+</form>
+
+<div class="bar">
+  <strong>Job:</strong> <span id="jobid">—</span>
+  <button id="zip" disabled>archive.zip</button>
+  <button id="doc" disabled>document.html</button>
+  <button id="del" disabled>DELETE job</button>
+</div>
+<div id="status"></div>
+<iframe id="htmlframe" hidden title="HTML document preview"></iframe>
+<div class="pages" id="pages"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+let jobId = null, poll = null, format = 'png';
+
+function show(msg, isErr) {
+  const el = $('#status');
+  el.textContent = msg;
+  el.className = isErr ? 'err' : '';
+}
+
+// read {error} body if present, else the status line
+async function errText(res) {
+  try { const j = await res.json(); if (j && j.error) return j.error; } catch {}
+  return res.status + ' ' + res.statusText;
+}
+
+$('#ping').onclick = async () => {
+  try {
+    const res = await fetch('/healthz');
+    $('#health').textContent = res.ok ? '✓ ' + (await res.text()).trim() : '✗ ' + res.status;
+  } catch (e) { $('#health').textContent = '✗ ' + e.message; }
+};
+
+$('#form').onsubmit = async e => {
+  e.preventDefault();
+  stopPoll();
+  $('#pages').innerHTML = '';
+  $('#htmlframe').hidden = true;
+  $('#htmlframe').removeAttribute('src');
+  const f = e.target;
+  format = f.format.value || 'png';
+  const fd = new FormData();
+  fd.append('file', f.file.files[0]);
+  fd.append('format', format);
+  fd.append('dpi', f.dpi.value);
+  fd.append('pages', f.pages.value);
+  fd.append('gray', f.gray.checked ? 'true' : 'false');
+  fd.append('alpha', f.alpha.checked ? 'true' : 'false');
+  show('submitting…');
+  try {
+    const res = await fetch('/v1/jobs', { method: 'POST', body: fd });
+    if (!res.ok) return show('submit failed: ' + await errText(res), true);
+    const j = await res.json();
+    jobId = j.id;
+    $('#jobid').textContent = jobId;
+    $('#zip').disabled = $('#del').disabled = false;
+    $('#doc').disabled = format !== 'html';
+    startPoll();
+  } catch (err) { show('submit error: ' + err.message, true); }
+};
+
+function startPoll() {
+  const tick = async () => {
+    try {
+      const res = await fetch('/v1/jobs/' + jobId);
+      if (!res.ok) return show('poll failed: ' + await errText(res), true);
+      const j = await res.json();
+      render(j);
+      if (j.status === 'done' || j.status === 'partial' || j.status === 'failed') stopPoll();
+    } catch (err) { show('poll error: ' + err.message, true); }
+  };
+  tick();
+  poll = setInterval(tick, 1500);
+}
+function stopPoll() { if (poll) { clearInterval(poll); poll = null; } }
+
+function render(j) {
+  show('status: ' + j.status +
+       '   pages: ' + (j.pages_done || 0) + '/' + (j.page_count || '?') +
+       (j.document_url ? '\ndocument: ' + j.document_url : '') +
+       (j.error ? '\nerror: ' + j.error : ''), j.status === 'failed');
+  const isHTML = (j.options && j.options.format === 'html') || format === 'html';
+  if (isHTML) {
+    $('#pages').innerHTML = '';
+    if (j.document_url && (j.status === 'done' || j.status === 'partial')) {
+      $('#htmlframe').hidden = false;
+      $('#htmlframe').src = j.document_url;
+      $('#doc').disabled = false;
+    }
+    return;
+  }
+  $('#htmlframe').hidden = true;
+  const box = $('#pages');
+  for (const p of (j.pages || [])) {
+    const id = 'p' + p.page;
+    let card = document.getElementById(id);
+    if (!card) {
+      card = document.createElement('div');
+      card.className = 'page';
+      card.id = id;
+      box.appendChild(card);
+    }
+    if (p.status === 'done' && p.url) {
+      // cache-bust once so a re-run of the same page id refreshes
+      card.innerHTML = '<img src="' + p.url + '" alt="page ' + p.page + '">' +
+                       '<div>#' + p.page + ' · ' + p.width + '×' + p.height + '</div>';
+    } else {
+      card.innerHTML = '<div>#' + p.page + '<br>' + p.status +
+                       (p.error ? '<br><span class="err">' + p.error + '</span>' : '') + '</div>';
+    }
+  }
+}
+
+$('#zip').onclick = () => { if (jobId) window.location = '/v1/jobs/' + jobId + '/archive.zip'; };
+$('#doc').onclick = () => { if (jobId) window.open('/v1/jobs/' + jobId + '/document.html', '_blank'); };
+
+$('#del').onclick = async () => {
+  if (!jobId) return;
+  const res = await fetch('/v1/jobs/' + jobId, { method: 'DELETE' });
+  if (res.status === 204) {
+    stopPoll();
+    show('deleted job ' + jobId);
+    $('#pages').innerHTML = '';
+    $('#htmlframe').hidden = true;
+    $('#htmlframe').removeAttribute('src');
+    $('#jobid').textContent = '—';
+    $('#zip').disabled = $('#del').disabled = $('#doc').disabled = true;
+    jobId = null;
+  } else {
+    show('delete failed: ' + await errText(res), true);
+  }
+};
+</script>
+</body>
+</html>
