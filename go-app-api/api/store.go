@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -19,6 +20,22 @@ type Store struct {
 func NewStore(dataDir string, ttl time.Duration) (*Store, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, err
+	}
+	// Job state is in memory only, so job dirs left by a previous process
+	// are orphans the sweeper never sees. Remove them — but only entries
+	// shaped like a job ID, so a mistyped -data-dir can't wipe unrelated
+	// files (dotfiles such as data/.gitignore are never touched either).
+	entries, err := os.ReadDir(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range entries {
+		if !e.IsDir() || !isJobID(e.Name()) {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(dataDir, e.Name())); err != nil {
+			log.Printf("remove stale job dir %s: %v", e.Name(), err)
+		}
 	}
 	return &Store{
 		jobs:    make(map[string]*Job),

@@ -31,6 +31,11 @@ func fixturePDF(t *testing.T) []byte {
 
 func testServer(t *testing.T) (*Server, *Store, *Pool) {
 	t.Helper()
+	return testServerToken(t, "")
+}
+
+func testServerToken(t *testing.T, token string) (*Server, *Store, *Pool) {
+	t.Helper()
 	dir := t.TempDir()
 	store, err := NewStore(dir, time.Hour)
 	if err != nil {
@@ -39,10 +44,17 @@ func testServer(t *testing.T) (*Server, *Store, *Pool) {
 	lim := DefaultLimits()
 	pool := NewPool(store, 1, 2, lim.MaxPages, lim.MaxQueueDepth, 30*time.Second)
 	t.Cleanup(pool.Shutdown)
-	return NewServer(store, pool, lim), store, pool
+	return NewServer(store, pool, lim, token), store, pool
 }
 
 func postJob(t *testing.T, h http.Handler, pdf []byte, fields map[string]string) *http.Response {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, newJobRequest(t, pdf, fields))
+	return rec.Result()
+}
+
+func newJobRequest(t *testing.T, pdf []byte, fields map[string]string) *http.Request {
 	t.Helper()
 	var body bytes.Buffer
 	w := multipart.NewWriter(&body)
@@ -59,9 +71,7 @@ func postJob(t *testing.T, h http.Handler, pdf []byte, fields map[string]string)
 	_ = w.Close()
 	req := httptest.NewRequest(http.MethodPost, "/v1/jobs", &body)
 	req.Header.Set("Content-Type", w.FormDataContentType())
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	return rec.Result()
+	return req
 }
 
 func waitDone(t *testing.T, h http.Handler, id string) jobView {

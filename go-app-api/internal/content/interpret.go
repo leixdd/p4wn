@@ -36,6 +36,8 @@ type interp struct {
 	formDepth int
 	errs      int
 	opCount   int
+
+	warn func(error) // nil = drop; reports images that failed to decode
 }
 
 type cachedImage struct {
@@ -45,14 +47,16 @@ type cachedImage struct {
 
 // Run interprets a content stream. baseGS supplies the initial gstate
 // (Identity CTM at page level — the page transform is baked into the
-// device).
-func Run(ctx context.Context, doc *pdf.Document, resources pdf.Dict, contentBytes []byte, dev render.Device) error {
+// device). warn, when non-nil, receives errors for content that was
+// skipped (images that failed to decode); rendering continues.
+func Run(ctx context.Context, doc *pdf.Document, resources pdf.Dict, contentBytes []byte, dev render.Device, warn func(error)) error {
 	in := &interp{
 		ctx:  ctx,
 		doc:  doc,
 		dev:  dev,
 		gs:   newGState(),
 		path: &graphics.Path{},
+		warn: warn,
 	}
 	in.resources = append(in.resources, resources)
 	err := in.runStream(contentBytes)
@@ -521,14 +525,21 @@ func (in *interp) doXObject(name pdf.Name) error {
 func (in *interp) drawImageXObject(stm *pdf.Stream) error {
 	entry, ok := in.imageCache[stm]
 	if !ok {
-		data, err := in.doc.DecodeStream(stm)
-		if err != nil && len(data) == 0 {
-			return nil
+		// decoding can take a while (JBIG2/CCITT/JPEG of a whole scan):
+		// honour the page timeout between images, not only every 4096 ops
+		if err := in.ctx.Err(); err != nil {
+			return err
 		}
-		names, _ := in.doc.StreamFilters(stm)
-		img, isMask, err := loadImage(in.doc, in.curResources(), stm.Dict, data, names)
+		var img *render.Image
+		var isMask bool
+		data, err := in.doc.DecodeStream(stm)
+		if err == nil || len(data) > 0 {
+			names, _ := in.doc.StreamFilters(stm)
+			img, isMask, err = loadImage(in.doc, in.curResources(), stm.Dict, data, names)
+		}
 		if err != nil {
 			img = nil // degrade: draw nothing
+			in.warnf(err)
 		}
 		entry = cachedImage{img: img, isMask: isMask}
 		if in.imageCache == nil {
@@ -668,6 +679,7 @@ func (in *interp) inlineImage(p *pdf.Parser) error {
 		}
 		out, err := filter.Decode(string(f), inlineFilterParams(in.doc, dict), decoded)
 		if err != nil && len(out) == 0 {
+			in.warnf(err)
 			return nil
 		}
 		decoded = out
@@ -675,6 +687,7 @@ func (in *interp) inlineImage(p *pdf.Parser) error {
 
 	img, isMask, err := loadImage(in.doc, in.curResources(), dict, decoded, filters)
 	if err != nil || img == nil {
+		in.warnf(err)
 		return nil
 	}
 	gs := &in.gs
@@ -686,25 +699,14 @@ func (in *interp) inlineImage(p *pdf.Parser) error {
 	return nil
 }
 
+func (in *interp) warnf(err error) {
+	if err != nil && in.warn != nil {
+		in.warn(err)
+	}
+}
+
 func inlineFilterParams(doc *pdf.Document, dict pdf.Dict) filter.Params {
-	p := filter.DefaultParams()
-	dp := doc.GetDict(imgGet(doc, dict, "DecodeParms", "DP"))
-	if dp == nil {
-		return p
-	}
-	if v, ok := doc.GetInt(dp.Get("Predictor")); ok {
-		p.Predictor = int(v)
-	}
-	if v, ok := doc.GetInt(dp.Get("Columns")); ok {
-		p.Columns = int(v)
-	}
-	if v, ok := doc.GetInt(dp.Get("Colors")); ok {
-		p.Colors = int(v)
-	}
-	if v, ok := doc.GetInt(dp.Get("BitsPerComponent")); ok {
-		p.BitsPerComponent = int(v)
-	}
-	return p
+	return doc.FilterParams(imgGet(doc, dict, "DecodeParms", "DP"))
 }
 
 func isPDFWhite(c byte) bool {

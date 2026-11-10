@@ -12,6 +12,16 @@ type Params struct {
 	Colors           int
 	BitsPerComponent int
 	EarlyChange      int // LZW; default 1
+
+	// CCITTFaxDecode. Columns above is also the fax width; the PDF default
+	// for CCITT is 1728, used when ColumnsSet is false.
+	ColumnsSet       bool
+	K                int // <0 Group 4, 0 Group 3 1D, >0 Group 3 2D
+	Rows             int // 0 = unknown (decode until end of data)
+	BlackIs1         bool
+	EncodedByteAlign bool
+
+	JBIG2Globals []byte // decoded /JBIG2Globals stream, if any
 }
 
 func DefaultParams() Params {
@@ -40,7 +50,11 @@ func Decode(name string, p Params, data []byte) ([]byte, error) {
 		return ascii85Decode(data)
 	case "RunLengthDecode", "RL":
 		return runLengthDecode(data)
-	case "DCTDecode", "DCT", "JPXDecode", "CCITTFaxDecode", "CCF", "JBIG2Decode":
+	case "CCITTFaxDecode", "CCF":
+		return ccittDecode(p, data)
+	case "JBIG2Decode":
+		return jbig2Decode(p, data)
+	case "DCTDecode", "DCT", "JPXDecode":
 		// image-only filters: decoded by the image loader, not here.
 		// Return the data untouched so the image layer can handle it.
 		return data, nil
@@ -52,10 +66,12 @@ func Decode(name string, p Params, data []byte) ([]byte, error) {
 }
 
 // IsImageFilter reports whether the named filter must be decoded by the
-// image codec layer rather than as a byte stream.
+// image codec layer rather than as a byte stream. CCITTFaxDecode and
+// JBIG2Decode are not: they decode here to packed 1-bpc rows that the
+// normal sample path reads.
 func IsImageFilter(name string) bool {
 	switch name {
-	case "DCTDecode", "DCT", "JPXDecode", "CCITTFaxDecode", "CCF", "JBIG2Decode":
+	case "DCTDecode", "DCT", "JPXDecode":
 		return true
 	}
 	return false

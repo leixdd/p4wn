@@ -5,17 +5,31 @@ package content
 import (
 	"context"
 	"fmt"
+	"math"
 
 	"p4wn/internal/graphics"
 	"p4wn/internal/pdf"
 	"p4wn/internal/render"
 )
 
+// DefaultMaxPagePixels caps the page pixmap area when RenderOptions.MaxPixels
+// is 0: 80 MP is ~240 MB as RGB, plus ~320 MB more while converting to an
+// image for PNG encoding (A1 at ~320 dpi, A0 at ~227 dpi).
+const DefaultMaxPagePixels = 80_000_000
+
 // RenderOptions controls one page render.
 type RenderOptions struct {
 	DPI   float64 // output resolution; 72 = 1 PDF unit per pixel
 	Gray  bool    // grayscale output instead of RGB
 	Alpha bool    // transparent background instead of white
+
+	// MaxPixels fails the page, before allocating, when its pixmap would
+	// exceed this many pixels; 0 = DefaultMaxPagePixels.
+	MaxPixels int
+
+	// Warn, when non-nil, is called (on the rendering goroutine) for each
+	// image that could not be decoded and was left out of the page.
+	Warn func(error)
 }
 
 // PageCTM builds the matrix mapping PDF user space to device pixels for the
@@ -51,6 +65,15 @@ func RenderPage(ctx context.Context, doc *pdf.Document, pageNum int, opts Render
 	if bbox.IsEmpty() {
 		return nil, fmt.Errorf("content: page %d has an empty box", pageNum+1)
 	}
+	maxPx := opts.MaxPixels
+	if maxPx <= 0 {
+		maxPx = DefaultMaxPagePixels
+	}
+	if px := int64(bbox.Width()) * int64(bbox.Height()); px > int64(maxPx) {
+		fit := opts.DPI * math.Sqrt(float64(maxPx)/float64(px))
+		return nil, fmt.Errorf("content: page %d would be %dx%d px (%.1f MP) at %g dpi, over the %.1f MP page limit; use dpi <= %d",
+			pageNum+1, bbox.Width(), bbox.Height(), float64(px)/1e6, opts.DPI, float64(maxPx)/1e6, int(fit))
+	}
 	nColor := 3
 	if opts.Gray {
 		nColor = 1
@@ -71,7 +94,7 @@ func RenderPage(ctx context.Context, doc *pdf.Document, pageNum int, opts Render
 	}
 	dev := render.NewDrawDevice(ctm, pix)
 	defer dev.Close()
-	if err := Run(ctx, doc, page.Resources, data, dev); err != nil {
+	if err := Run(ctx, doc, page.Resources, data, dev, opts.Warn); err != nil {
 		return nil, err
 	}
 	return pix, nil

@@ -15,6 +15,13 @@ type GlyphRun struct {
 	IsSpace bool    // single-byte code 32 (word-spacing applies)
 	Bytes   int     // bytes consumed from the string
 	Unicode string  // decoded Unicode when known; empty otherwise
+
+	// Vertical writing (Font.Vertical) only, in em: the advance (negative =
+	// down) and the position vector from horizontal to vertical origin.
+	W1Y, VX, VY float64
+
+	fromCJK bool // GID indexes the CJK fallback face
+	rotate  bool // fallback glyph is turned 90° (vertical ー etc.)
 }
 
 // FontFileKind identifies the browser-usable embedded font container.
@@ -49,9 +56,15 @@ type Font struct {
 	hasWidth    [256]bool
 
 	// CID fonts
+	cmap      *cidCMap // Type0 /Encoding (identityCMap when unsupported)
 	cidToGID  []uint16 // nil = identity
 	widthsCID map[uint32]float64
 	defaultW  float64
+	dw2       [2]float64            // vertical: default vy, w1y (em)
+	widthsV   map[uint32][3]float64 // vertical: per-CID w1y, vx, vy (em)
+
+	substituted bool        // no usable embedded program (Go font stands in)
+	cjk         *sfntSource // CJK fallback face; nil when not configured
 }
 
 // Load resolves a PDF font dict. Never returns nil: on total failure a
@@ -120,6 +133,8 @@ func loadSimple(doc *pdf.Document, dict pdf.Dict) *Font {
 	if src == nil {
 		sub := substituteFont(baseName, flags)
 		f.src = sub.src
+		f.substituted = true
+		f.cjk = cjkSource()
 	} else {
 		f.src = src
 	}
@@ -312,16 +327,29 @@ func loadType0(doc *pdf.Document, dict pdf.Dict) *Font {
 	if n, ok := dict.GetName("BaseFont"); ok {
 		baseName = string(n)
 	}
-	// only Identity-H/V CMaps are supported; others degrade to Identity
 	descFonts := doc.GetArray(dict.Get("DescendantFonts"))
 	var cidFont pdf.Dict
 	if len(descFonts) > 0 {
 		cidFont = doc.GetDict(descFonts[0])
 	}
-	f := &Font{isCID: true, defaultW: 1.0, BaseName: baseName, FaceID: cssFaceID(baseName)}
+	f := &Font{isCID: true, defaultW: 1.0, BaseName: baseName, FaceID: cssFaceID(baseName),
+		cmap: identityCMap, dw2: [2]float64{0.88, -1}, cjk: cjkSource()}
+	// predefined CMaps (see cmap.go); unknown names and embedded CMap
+	// streams degrade to Identity, keeping only an embedded stream's /WMode
+	switch enc := doc.Resolve(dict.Get("Encoding")).(type) {
+	case pdf.Name:
+		if m := lookupCMap(string(enc)); m != nil {
+			f.cmap = m
+		}
+	case *pdf.Stream:
+		if wm, ok := doc.GetInt(enc.Dict.Get("WMode")); ok && wm == 1 {
+			f.cmap = &cidCMap{identity: true, vertical: true, split: split2}
+		}
+	}
 	if cidFont == nil {
 		sub := substituteFont(baseName, 0)
 		f.src = sub.src
+		f.substituted = true
 		loadToUnicode(doc, dict, f)
 		return f
 	}
@@ -342,6 +370,7 @@ func loadType0(doc *pdf.Document, dict pdf.Dict) *Font {
 	if src == nil {
 		sub := substituteFont(baseName, flags)
 		src = sub.src
+		f.substituted = true
 	}
 	f.src = src
 
@@ -363,8 +392,45 @@ func loadType0(doc *pdf.Document, dict pdf.Dict) *Font {
 		f.defaultW = dw / 1000
 	}
 	f.widthsCID = parseCIDWidths(doc, doc.GetArray(cidFont.Get("W")))
+	if f.cmap.vertical {
+		if arr := doc.GetArray(cidFont.Get("DW2")); len(arr) == 2 {
+			f.dw2[0], _ = doc.GetFloat(arr[0])
+			f.dw2[1], _ = doc.GetFloat(arr[1])
+			f.dw2[0], f.dw2[1] = f.dw2[0]/1000, f.dw2[1]/1000
+		}
+		f.widthsV = parseCIDWidths2(doc, doc.GetArray(cidFont.Get("W2")))
+	}
 	loadToUnicode(doc, dict, f)
 	return f
+}
+
+// parseCIDWidths2 expands /W2: [c [w1y vx vy ...] cFirst cLast w1y vx vy ...].
+func parseCIDWidths2(doc *pdf.Document, arr pdf.Array) map[uint32][3]float64 {
+	out := map[uint32][3]float64{}
+	num := func(o pdf.Object) float64 { v, _ := doc.GetFloat(o); return v / 1000 }
+	for i := 0; i < len(arr); {
+		c1, ok := doc.GetInt(arr[i])
+		if !ok || i+1 >= len(arr) || c1 < 0 {
+			break
+		}
+		if v, ok := doc.Resolve(arr[i+1]).(pdf.Array); ok {
+			for j := 0; j+2 < len(v); j += 3 {
+				out[uint32(c1)+uint32(j/3)] = [3]float64{num(v[j]), num(v[j+1]), num(v[j+2])}
+			}
+			i += 2
+			continue
+		}
+		c2, ok := doc.GetInt(arr[i+1])
+		if !ok || i+4 >= len(arr) || c2 < c1 || c2-c1 >= 65536 {
+			break
+		}
+		m := [3]float64{num(arr[i+2]), num(arr[i+3]), num(arr[i+4])}
+		for c := c1; c <= c2; c++ {
+			out[uint32(c)] = m
+		}
+		i += 5
+	}
+	return out
 }
 
 // parseCIDWidths expands /W: [c [w w ...] cFirst cLast w ...].
@@ -415,24 +481,14 @@ func parseCIDWidths(doc *pdf.Document, arr pdf.Array) map[uint32]float64 {
 func (f *Font) Decode(s []byte) []GlyphRun {
 	var out []GlyphRun
 	if f.isCID {
-		for i := 0; i+1 < len(s); i += 2 {
-			cid := uint32(s[i])<<8 | uint32(s[i+1])
-			gid := uint16(cid)
-			if f.cidToGID != nil {
-				if int(cid) < len(f.cidToGID) {
-					gid = f.cidToGID[cid]
-				} else {
-					gid = 0
-				}
+		for i := 0; i < len(s); {
+			code, n := f.cmap.next(s[i:])
+			if n == 0 {
+				break // trailing partial code
 			}
-			w, ok := f.widthsCID[cid]
-			if !ok {
-				w = f.defaultW
-			}
-			out = append(out, GlyphRun{
-				GID: gid, Code: cid, WidthEm: w, Bytes: 2,
-				Unicode: f.resolveUnicode(cid, gid, true),
-			})
+			raw := s[i : i+n]
+			i += n
+			out = append(out, f.decodeCID(code, raw))
 		}
 		return out
 	}
@@ -441,8 +497,13 @@ func (f *Font) Decode(s []byte) []GlyphRun {
 			GID: f.codeToGID[b], Code: uint32(b), IsSpace: b == 32, Bytes: 1,
 			Unicode: f.resolveUnicode(uint32(b), f.codeToGID[b], false),
 		}
+		if f.substituted && g.GID == 0 {
+			f.useCJK(&g, firstRune(g.Unicode))
+		}
 		if f.hasWidth[b] {
 			g.WidthEm = f.codeWidthEm[b]
+		} else if g.fromCJK {
+			g.WidthEm, _ = f.cjk.AdvanceEm(g.GID)
 		} else if f.src != nil {
 			g.WidthEm, _ = f.src.AdvanceEm(g.GID)
 		}
@@ -450,6 +511,58 @@ func (f *Font) Decode(s []byte) []GlyphRun {
 	}
 	return out
 }
+
+// decodeCID resolves one composite-font code. With a known CID and an
+// embedded program the glyph comes from the CID (as before); otherwise it is
+// looked up by Unicode in the font's own cmap or the Go substitute, then in
+// the CJK fallback face.
+func (f *Font) decodeCID(code uint32, raw []byte) GlyphRun {
+	g := GlyphRun{Code: code, Bytes: len(raw), IsSpace: len(raw) == 1 && code == 32, WidthEm: f.defaultW}
+	uni := unicodeForCode(f.toUnicode, code, "", true)
+	if uni == "" && f.cmap.unicode != nil {
+		uni = f.cmap.unicode(raw)
+	}
+	cid, haveCID := f.cmap.cid(code, uni)
+	if haveCID {
+		if w, ok := f.widthsCID[cid]; ok {
+			g.WidthEm = w
+		}
+	}
+	if haveCID && !f.substituted {
+		g.GID = uint16(cid)
+		if f.cidToGID != nil {
+			g.GID = 0
+			if int(cid) < len(f.cidToGID) {
+				g.GID = f.cidToGID[cid]
+			}
+		}
+		if uni == "" {
+			uni = f.resolveUnicode(cid, g.GID, true)
+		}
+	} else if r := firstRune(uni); r != 0 && f.src != nil {
+		if g.GID = f.src.GIDForRune(r); g.GID == 0 {
+			f.useCJK(&g, r)
+		}
+	}
+	g.Unicode = uni
+	if f.Vertical() {
+		g.W1Y, g.VX, g.VY = f.dw2[1], g.WidthEm/2, f.dw2[0]
+		if m, ok := f.widthsV[cid]; ok && haveCID {
+			g.W1Y, g.VX, g.VY = m[0], m[1], m[2]
+		}
+	}
+	return g
+}
+
+func firstRune(s string) rune {
+	for _, r := range s {
+		return r
+	}
+	return 0
+}
+
+// Vertical reports writing mode 1 (a -V CMap): glyphs advance downwards.
+func (f *Font) Vertical() bool { return f.cmap != nil && f.cmap.vertical }
 
 // resolveUnicode prefers ToUnicode / encoding maps, then embedded cmap reverse lookup.
 func (f *Font) resolveUnicode(code uint32, gid uint16, isCID bool) string {
@@ -520,6 +633,25 @@ func cssFaceID(baseName string) string {
 		}
 	}
 	return b.String()
+}
+
+// GlyphOutline returns the outline for a decoded glyph in em units, or nil
+// when there is nothing to draw.
+func (f *Font) GlyphOutline(g GlyphRun) *graphics.Path {
+	if g.fromCJK {
+		p, err := f.cjk.OutlineEm(g.GID)
+		if err != nil {
+			return nil
+		}
+		if g.rotate {
+			p = p.Transformed(rotateCW)
+		}
+		return p
+	}
+	if f.isCID && g.GID == 0 {
+		return nil // unmapped code: no .notdef box
+	}
+	return f.Outline(g.GID)
 }
 
 // Outline returns the glyph path in em units, or nil (Type3/missing glyph).

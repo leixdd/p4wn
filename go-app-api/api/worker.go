@@ -22,8 +22,12 @@ type Pool struct {
 	pageWorkers int
 	pageTimeout time.Duration
 	maxPages    int
-	wg          sync.WaitGroup
-	cancel      context.CancelFunc
+
+	// MaxPagePixels caps each PNG page's pixel area (0 = content default).
+	// Set before the first Enqueue.
+	MaxPagePixels int
+	wg            sync.WaitGroup
+	cancel        context.CancelFunc
 }
 
 func NewPool(store *Store, jobWorkers, pageWorkers, maxPages int, queueDepth int, pageTimeout time.Duration) *Pool {
@@ -264,9 +268,11 @@ func (p *Pool) renderPage(ctx context.Context, doc *pdf.Document, job Job, page 
 	defer cancelTimeout()
 
 	pix, err := content.RenderPage(ctx, doc, page, content.RenderOptions{
-		DPI:   job.Options.DPI,
-		Gray:  job.Options.Gray,
-		Alpha: job.Options.Alpha,
+		DPI:       job.Options.DPI,
+		Gray:      job.Options.Gray,
+		Alpha:     job.Options.Alpha,
+		MaxPixels: p.MaxPagePixels,
+		Warn:      func(err error) { res.Warnings = addWarning(res.Warnings, err) },
 	})
 	if err != nil {
 		res.Status = PageFailed
@@ -317,6 +323,23 @@ func (p *Pool) renderHTMLPage(ctx context.Context, doc *pdf.Document, page int) 
 	res.Width = int(frag.Width + 0.5)
 	res.Height = int(frag.Height + 0.5)
 	return res, frag
+}
+
+// maxPageWarnings bounds the per-page warning list (a page may draw the
+// same broken inline image thousands of times).
+const maxPageWarnings = 10
+
+func addWarning(list []string, err error) []string {
+	msg := err.Error()
+	if len(list) >= maxPageWarnings {
+		return list
+	}
+	for _, w := range list {
+		if w == msg {
+			return list
+		}
+	}
+	return append(list, msg)
 }
 
 func pageFileName(page1 int) string { return fmt.Sprintf("page-%04d.png", page1) }

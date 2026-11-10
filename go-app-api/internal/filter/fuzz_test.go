@@ -15,5 +15,9 @@ func FuzzDecode(f *testing.F) {
 			"ASCII85Decode", "RunLengthDecode"} {
 			Decode(name, p, data)
 		}
+		for _, k := range []int{-1, 0} { // CCITT: Columns doubles as fax width
+			p.K, p.ColumnsSet = k, true
+			Decode("CCITTFaxDecode", p, data)
+		}
 	})
 }
