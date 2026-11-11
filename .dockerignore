@@ -1,0 +1,9 @@
+.git
+.githooks
+.cursor
+data
+deploy
+scripts
+testdata
+testtools
+**/*_test.go

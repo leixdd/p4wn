@@ -8,12 +8,37 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"p4wn/internal/pdf"
 )
 
 var updateGolden = flag.Bool("update", false, "rewrite golden files")
+
+// TestCCITTWarnings: the fixture's Group 3 2D image (unsupported by
+// x/image/ccitt) is skipped with a warning, not silently.
+func TestCCITTWarnings(t *testing.T) {
+	var warns []string
+	renderFixture(t, "ccitt.pdf", RenderOptions{DPI: 36, Warn: func(err error) {
+		warns = append(warns, err.Error())
+	}})
+	if len(warns) != 1 || !strings.Contains(warns[0], "Group 3 2D") {
+		t.Fatalf("warnings = %q", warns)
+	}
+}
+
+// TestJBIG2Warnings: the fixture's halftone-region image is skipped with an
+// error naming the unsupported segment.
+func TestJBIG2Warnings(t *testing.T) {
+	var warns []string
+	renderFixture(t, "jbig2.pdf", RenderOptions{DPI: 36, Warn: func(err error) {
+		warns = append(warns, err.Error())
+	}})
+	if len(warns) != 1 || !strings.Contains(warns[0], "unsupported halftone region segment type 22") {
+		t.Fatalf("warnings = %q", warns)
+	}
+}
 
 func renderFixture(t *testing.T, name string, opts RenderOptions) image.Image {
 	t.Helper()
@@ -48,6 +73,13 @@ func TestGolden(t *testing.T) {
 		{"embedttf.pdf", "embedttf-144.png", RenderOptions{DPI: 144}},
 		{"clip.pdf", "clip-144.png", RenderOptions{DPI: 144}},
 		{"enc-aes-256.pdf", "enc-aes-256-72.png", RenderOptions{DPI: 72}},
+		{"ccitt.pdf", "ccitt-72.png", RenderOptions{DPI: 72}},
+		// no CJK fallback: pins the Latin glyph positions/widths per CMap
+		{"japanese-cmaps.pdf", "japanese-cmaps-72.png", RenderOptions{DPI: 72}},
+		{"large-format-a0.pdf", "large-format-a0-9.png", RenderOptions{DPI: 9}},
+		// 1 image px = 1 pt: at 72 dpi the JBIG2 bitmaps land pixel-exact
+		// (checked against poppler's pdfimages output by testtools/genjbig2)
+		{"jbig2.pdf", "jbig2-72.png", RenderOptions{DPI: 72}},
 	}
 	for _, c := range cases {
 		t.Run(c.golden, func(t *testing.T) {

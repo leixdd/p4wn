@@ -6,6 +6,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"p4wn/internal/content"
+	"p4wn/internal/font"
 )
 
 // Limits bound resource usage per request/job.
@@ -15,6 +18,7 @@ type Limits struct {
 	MaxQueueDepth  int
 	MinDPI         float64
 	MaxDPI         float64
+	MaxPagePixels  int // per rendered page; server -max-megapixels
 }
 
 func DefaultLimits() Limits {
@@ -23,9 +27,14 @@ func DefaultLimits() Limits {
 		MaxPages:       500,
 		MaxQueueDepth:  100,
 		MinDPI:         8,
-		MaxDPI:         1200,
+		MaxDPI:         300, // server -max-dpi; Letter @1200 dpi needs ~1 GB of pixmaps
+		MaxPagePixels:  content.DefaultMaxPagePixels,
 	}
 }
+
+// SetCJKFont configures the process-wide fallback font for CJK text in
+// non-embedded fonts (see font.SetCJKFallback). Call before rendering.
+func SetCJKFont(path string) error { return font.SetCJKFallback(path) }
 
 // OutputFormat selects the job artifact type.
 type OutputFormat string
@@ -61,8 +70,10 @@ func ParseJobOptions(get func(string) string, lim Limits) (JobOptions, error) {
 		}
 		opts.DPI = 72 * v
 	}
-	if opts.DPI < lim.MinDPI || opts.DPI > lim.MaxDPI {
-		return opts, fmt.Errorf("dpi %.4g out of range [%g, %g]", opts.DPI, lim.MinDPI, lim.MaxDPI)
+	// scale is folded into DPI above, so this bound covers both; the negated
+	// form also rejects NaN, which compares false against everything.
+	if !(opts.DPI >= lim.MinDPI && opts.DPI <= lim.MaxDPI) {
+		return opts, fmt.Errorf("dpi %.4g out of range [%g, %g] (scale = dpi/72)", opts.DPI, lim.MinDPI, lim.MaxDPI)
 	}
 	opts.Pages = get("pages")
 	if opts.Pages != "" {

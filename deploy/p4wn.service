@@ -1,0 +1,36 @@
+# Sample systemd unit for p4wn-server on a small (2 vCPU / 2 GB) host.
+#
+# Install:
+#   sudo useradd --system --no-create-home --shell /usr/sbin/nologin p4wn
+#   sudo install -m 0755 p4wn-server /usr/local/bin/p4wn-server
+#   sudo install -m 0600 /dev/null /etc/p4wn.env
+#   echo "P4WN_TOKEN=$(openssl rand -hex 32)" | sudo tee /etc/p4wn.env >/dev/null
+#   sudo cp deploy/p4wn.service /etc/systemd/system/ && sudo systemctl daemon-reload
+#   sudo systemctl enable --now p4wn
+#
+# Port 8081: 8080 is taken by another service on the same network.
+
+[Unit]
+Description=p4wn PDF to PNG/HTML conversion API
+After=network.target
+
+[Service]
+User=p4wn
+Group=p4wn
+# creates /var/lib/p4wn owned by p4wn; stale job dirs there are removed at startup
+StateDirectory=p4wn
+EnvironmentFile=/etc/p4wn.env
+# Go GC soft limit below MemoryMax so the heap is reclaimed before the cgroup OOM-kills
+Environment=GOMEMLIMIT=1200MiB
+ExecStart=/usr/local/bin/p4wn-server -addr 127.0.0.1:8081 -data-dir /var/lib/p4wn -workers 1 -page-workers 2 -max-dpi 300 -token ${P4WN_TOKEN}
+Restart=always
+RestartSec=2
+MemoryMax=1500M
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

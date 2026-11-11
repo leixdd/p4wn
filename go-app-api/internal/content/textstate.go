@@ -83,6 +83,7 @@ func (in *interp) showText(s []byte) {
 		t.FontData = ts.font.FileData
 		t.FontMIME = ts.font.FontMIME()
 	}
+	vertical := ts.font.Vertical()
 	for _, g := range ts.font.Decode(s) {
 		// glyph space (em) → text space → user space
 		if ts.render != 3 { // 3 = invisible
@@ -90,9 +91,15 @@ func (in *interp) showText(s []byte) {
 				A: ts.size * ts.scale, D: ts.size,
 				F: ts.rise,
 			}
+			if vertical {
+				// the current point is the vertical origin; the glyph is
+				// drawn from its horizontal origin, offset by -v
+				gtm.E -= g.VX * ts.size * ts.scale
+				gtm.F -= g.VY * ts.size
+			}
 			gtm = graphics.Concat(gtm, ts.tm)
 			glyph := render.Glyph{Trm: gtm, Unicode: g.Unicode}
-			if path := ts.font.Outline(g.GID); path != nil {
+			if path := ts.font.GlyphOutline(g); path != nil {
 				glyph.Path = path
 			}
 			// Always keep the glyph so advances stay visible to HTML/PNG
@@ -100,6 +107,14 @@ func (in *interp) showText(s []byte) {
 			t.Glyphs = append(t.Glyphs, glyph)
 		}
 		// advance
+		if vertical {
+			ty := g.W1Y*ts.size + ts.charSpace
+			if g.IsSpace {
+				ty += ts.wordSpace
+			}
+			ts.tm = graphics.Concat(graphics.Translate(0, ty), ts.tm)
+			continue
+		}
 		tx := (g.WidthEm*ts.size + ts.charSpace) * ts.scale
 		if g.IsSpace {
 			tx += ts.wordSpace * ts.scale
@@ -129,11 +144,13 @@ func (in *interp) showTextAdjusted(arr pdf.Array) {
 		switch v := in.doc.Resolve(o).(type) {
 		case pdf.String:
 			in.showText([]byte(v))
-		case pdf.Integer:
-			tx := -float64(v) / 1000 * ts.size * ts.scale
-			ts.tm = graphics.Concat(graphics.Translate(tx, 0), ts.tm)
-		case pdf.Real:
-			tx := -float64(v) / 1000 * ts.size * ts.scale
+		case pdf.Integer, pdf.Real:
+			adj, _ := pdf.ToFloat(v)
+			if ts.font != nil && ts.font.Vertical() {
+				ts.tm = graphics.Concat(graphics.Translate(0, -adj/1000*ts.size), ts.tm)
+				continue
+			}
+			tx := -adj / 1000 * ts.size * ts.scale
 			ts.tm = graphics.Concat(graphics.Translate(tx, 0), ts.tm)
 		}
 	}

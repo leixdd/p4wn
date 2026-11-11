@@ -21,11 +21,20 @@ p4wn aims to convert any source material in the future. Today it only supports:
   miter limits, dashes), bezier curves, scissor and arbitrary-path clipping —
   rasterized with 17×15 subpixel anti-aliasing (PNG) or emitted as SVG (HTML)
 - **Images**: JPEG (DCTDecode), Flate/LZW/ASCII/RunLength raw images at
-  1–16 bits per component, Indexed palettes, ImageMask stencils, SMask soft
+  1–16 bits per component, JBIG2 (pure Go `internal/jbig2`: generic regions
+  — arithmetic templates 0–3 with AT pixels and TPGDON, or MMR — plus
+  arithmetic symbol dictionaries, incl. JBIG2Globals and reused coding
+  contexts, and text regions; striped pages), CCITT fax (Group 4, and Group 3 1D with EOL
+  codes, via `golang.org/x/image/ccitt`; honours Columns, Rows, BlackIs1,
+  EncodedByteAlign), Indexed palettes, ImageMask stencils, SMask soft
   masks, color-key masking, inline images
 - **Text**: embedded TrueType and CFF/OpenType fonts, bare-CFF (Type1C),
-  Type0/CID (Identity-H) fonts, base-14 substitution via the Go fonts with
-  PDF /Widths-driven layout, all text render modes; HTML also uses ToUnicode /
+  Type0/CID fonts with Identity and the common Japanese predefined CMaps
+  (Shift-JIS / EUC-JP / JIS via `golang.org/x/text`, UniJIS UCS2/UTF-*),
+  horizontal and vertical writing, base-14 substitution via the Go fonts
+  with PDF /Widths-driven layout, an optional runtime CJK fallback font
+  (`-cjk-font`: .ttf, .otf incl. CID-keyed CFF, .ttc/.otc; not CFF2/variable,
+  WOFF or Type1), all text render modes; HTML also uses ToUnicode / CMap /
   encoding maps / embedded cmap reverse-lookup for selectable text (including
   Japanese) with glyph-outline fallback and CJK system font-family fallbacks
 - **Color**: DeviceRGB/Gray/CMYK, Indexed, ICCBased (via alternate),
@@ -33,13 +42,47 @@ p4wn aims to convert any source material in the future. Today it only supports:
 - **Encryption**: standard security handler — RC4-40/128, AES-128, AES-256
   (empty user password)
 
-Known degradations (never fatal): shadings render as nothing, JBIG2/JPX/CCITT
-images are skipped, Type1 (FontFile) and Type3 fonts substitute, text-clip
-modes fill without clipping. HTML does not export annotations, links, or
-tagged reading order. Type0 encodings other than Identity-H/V (e.g.
-`90ms-RKSJ-H`, `UniJIS-UTF16-H`) are not decoded. PDF TrueType subsets with
-broken/missing `cmap`/`post` tables are repaired so embedded outlines (Cambria,
-MS-PGothic, etc.) still load by GID.
+Known degradations (never fatal):
+
+- Shadings render as nothing; Type1 (FontFile) and Type3 fonts substitute;
+  text-clip modes fill without clipping.
+- JPX images are skipped.
+- JBIG2 images using Huffman-coded symbol dictionaries or text regions
+  (and table segments), refinement/aggregate coding, generic refinement
+  regions, pattern dictionaries / halftone regions, intermediate regions or
+  the extended generic template are skipped with an error naming the
+  segment. Caps per stream: 64 MP per bitmap, 2×64 MP decoded in total,
+  2^20 symbols, 2^20 text instances, 2^28 composited text pixels.
+- CCITT: Group 3 2D (K>0), Group 3 1D without an EOL before every row, and
+  Group 3 with EncodedByteAlign fill bits before the EOLs are skipped
+  (x/image/ccitt limits).
+- Images that fail to decode are left out of the page and reported as page
+  warnings (API `warnings`, CLI stderr, fidelity harness); the other
+  degradations here are silent.
+- **Non-embedded CJK fonts render blank in PNG output without `-cjk-font`**
+  (server and CLI flag): the Go substitute fonts have no CJK glyphs. HTML
+  still emits the text when its Unicode is known.
+- Type0 CMaps decoded: Identity-H/V, `Uni{JIS,GB,CNS,KS}-{UCS2,UCS2-HW,UTF16,
+  UTF8,UTF32}-H/V`, `90ms-RKSJ-H/V`, `90msp-RKSJ-H/V`, `EUC-H/V`, `H`/`V`.
+  Others (e.g. `78-RKSJ`, `90pv-RKSJ`, `Ext-RKSJ`, `Add-*`, `GBK-EUC`,
+  `KSC-*`) and embedded CMap streams are read as Identity (an embedded
+  stream's `/WMode` is kept).
+- No Adobe CMap tables are embedded, so with a non-Identity CMap a two-byte
+  code has no CID: its glyph is looked up by Unicode (embedded font's cmap,
+  Go substitute, then `-cjk-font`), its width is `/DW`, and `/W2` does not
+  apply. Only single-byte / ASCII / half-width-katakana codes get CIDs (for
+  `/W`). An embedded CID-keyed CFF font with such a CMap therefore draws
+  from the fallback font, not its own glyphs. x/text's Shift-JIS/EUC-JP
+  decoding differs from Adobe-Japan1 Unicode for a handful of codes
+  (〜/～, ‖/∥, −/－).
+- Vertical writing (`-V` CMaps, WMode 1) lays out top-to-bottom with
+  `/DW2`/`/W2`, but glyph substitution for vertical forms only exists on the
+  `-cjk-font` path (punctuation presentation forms, ー/～ rotated); embedded
+  fonts draw whatever CID/GID the PDF selects.
+- HTML does not export annotations, links, or tagged reading order.
+
+PDF TrueType subsets with broken/missing `cmap`/`post` tables are repaired so
+embedded outlines (Cambria, MS-PGothic, etc.) still load by GID.
 
 ## Usage
 
@@ -97,7 +140,8 @@ pdf-to-png/
 Inside `go-app-api/internal`:
 
 - `pdf` — object model, lexer/parser, xref machinery, decryption
-- `filter` — stream decode filters + predictors
+- `filter` — stream decode filters + predictors (incl. CCITT, JBIG2)
+- `jbig2` — pure-Go JBIG2 decoder used by `filter`
 - `graphics` — matrices, rects, paths, colorspaces, pixmaps
 - `render` — rasterizer, stroker, draw device, HTML/SVG device, image sampling
 - `font` — font loading, encodings, ToUnicode CMaps, CFF wrapping, substitution
@@ -109,10 +153,17 @@ The `testtools` module:
   to the real server, so no CORS): `go run testtools/webui`, open `:3000`
 - `imgdiff` — pixel-diff two PNGs (alpha-composited over white)
 - `inkprofile` — structural layout comparison via ink-coverage profiles
-- `genimg`, `gentext`, `genjp` — generators for the image/font/Japanese test fixtures
+- `fidelity` — render a directory of PDFs; report failed / near-blank pages
+  and silently-degraded features per file
+- `genimg`, `gentext`, `genjp`, `gencjk`, `genccitt`, `genjbig2`,
+  `genlarge` — generators for the image/font/Japanese/CMap/CCITT/JBIG2/
+  large-page test fixtures (`genccitt` and `genjbig2` need libtiff's
+  `tiffcp`; `genjbig2` carries its own spec-based JBIG2 encoder, and its
+  output is meant to be cross-checked with poppler's `pdfimages`)
 
-The only dependency is `golang.org/x/image` (sfnt font parsing + the Go
-fonts used as base-14 substitutes). Everything else is stdlib.
+Dependencies: `golang.org/x/image` (sfnt font parsing, the Go fonts used as
+base-14 substitutes, CCITT decoding) and `golang.org/x/text` (Shift-JIS /
+EUC-JP decoding for Japanese CMaps). Everything else is stdlib.
 
 ## Testing
 

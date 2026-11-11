@@ -70,29 +70,7 @@ func (d *Document) StreamFilters(s *Stream) ([]Name, []filter.Params) {
 	if dp == nil {
 		dp = d.Resolve(s.Dict.Get("DP"))
 	}
-	getParams := func(obj Object) filter.Params {
-		p := filter.DefaultParams()
-		pd, ok := d.Resolve(obj).(Dict)
-		if !ok {
-			return p
-		}
-		if v, ok := d.GetInt(pd.Get("Predictor")); ok {
-			p.Predictor = int(v)
-		}
-		if v, ok := d.GetInt(pd.Get("Columns")); ok {
-			p.Columns = int(v)
-		}
-		if v, ok := d.GetInt(pd.Get("Colors")); ok {
-			p.Colors = int(v)
-		}
-		if v, ok := d.GetInt(pd.Get("BitsPerComponent")); ok {
-			p.BitsPerComponent = int(v)
-		}
-		if v, ok := d.GetInt(pd.Get("EarlyChange")); ok {
-			p.EarlyChange = int(v)
-		}
-		return p
-	}
+	getParams := d.FilterParams
 	switch dpv := dp.(type) {
 	case Dict:
 		if len(parms) > 0 {
@@ -117,9 +95,54 @@ func (d *Document) StreamFilters(s *Stream) ([]Name, []filter.Params) {
 	return names, parms
 }
 
+// FilterParams reads one /DecodeParms dictionary (defaults when obj is not a
+// dict). Shared by stream and inline-image decoding.
+func (d *Document) FilterParams(obj Object) filter.Params {
+	p := filter.DefaultParams()
+	pd, ok := d.Resolve(obj).(Dict)
+	if !ok {
+		return p
+	}
+	if v, ok := d.GetInt(pd.Get("Predictor")); ok {
+		p.Predictor = int(v)
+	}
+	if v, ok := d.GetInt(pd.Get("Columns")); ok {
+		p.Columns = int(v)
+		p.ColumnsSet = true
+	}
+	if v, ok := d.GetInt(pd.Get("Colors")); ok {
+		p.Colors = int(v)
+	}
+	if v, ok := d.GetInt(pd.Get("BitsPerComponent")); ok {
+		p.BitsPerComponent = int(v)
+	}
+	if v, ok := d.GetInt(pd.Get("EarlyChange")); ok {
+		p.EarlyChange = int(v)
+	}
+	if v, ok := d.GetInt(pd.Get("K")); ok {
+		p.K = int(v)
+	}
+	if v, ok := d.GetInt(pd.Get("Rows")); ok {
+		p.Rows = int(v)
+	}
+	if v, ok := d.Resolve(pd.Get("BlackIs1")).(Bool); ok {
+		p.BlackIs1 = bool(v)
+	}
+	if v, ok := d.Resolve(pd.Get("EncodedByteAlign")).(Bool); ok {
+		p.EncodedByteAlign = bool(v)
+	}
+	if g, ok := d.Resolve(pd.Get("JBIG2Globals")).(*Stream); ok {
+		if data, err := d.DecodeStream(g); err == nil || len(data) > 0 {
+			p.JBIG2Globals = data
+		}
+	}
+	return p
+}
+
 // DecodeStream decodes all byte-stream filters. Image-codec filters
-// (DCT/JPX/CCITT/JBIG2) pass their data through untouched — the image layer
-// handles those; use StreamFilters to detect them.
+// (DCT/JPX) pass their data through untouched — the image layer handles
+// those; use StreamFilters to detect them. CCITT and JBIG2 decode here to
+// packed 1-bpc samples.
 func (d *Document) DecodeStream(s *Stream) ([]byte, error) {
 	data := d.RawStreamData(s)
 	names, parms := d.StreamFilters(s)

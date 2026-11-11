@@ -46,7 +46,7 @@ func RenderPageHTML(ctx context.Context, doc *pdf.Document, pageNum int) (PageHT
 	}
 	dev := render.NewHTMLDevice(ctm, w, h)
 	defer dev.Close()
-	if err := Run(ctx, doc, page.Resources, data, dev); err != nil {
+	if err := Run(ctx, doc, page.Resources, data, dev, nil); err != nil {
 		return PageHTML{}, err
 	}
 	out := PageHTML{

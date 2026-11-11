@@ -32,6 +32,9 @@ type PageResult struct {
 	Height int        `json:"height,omitempty"`
 	Error  string     `json:"error,omitempty"`
 	URL    string     `json:"url,omitempty"`
+	// Warnings lists content left out of a rendered page (e.g. an image in
+	// an unsupported codec variant); the page itself still succeeded.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // Job is one conversion request. Fields are guarded by the Store mutex —
@@ -60,4 +63,10 @@ func NewJobID() string {
 		panic(err) // crypto/rand failure is unrecoverable
 	}
 	return hex.EncodeToString(b[:])
+}
+
+// isJobID reports whether name has the shape NewJobID produces.
+func isJobID(name string) bool {
+	_, err := hex.DecodeString(name)
+	return len(name) == 32 && err == nil
 }

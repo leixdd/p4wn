@@ -1,6 +1,6 @@
 // p4wn renders a PDF file to per-page PNG images or a single HTML document.
 //
-//	p4wn [-dpi 150] [-gray] [-alpha] [-pages 1-3,7] [-format png|html] input.pdf [outdir]
+//	p4wn [-dpi 150] [-gray] [-alpha] [-pages 1-3,7] [-format png|html] [-cjk-font f.ttc] input.pdf [outdir]
 package main
 
 import (
@@ -22,6 +22,8 @@ func main() {
 	alpha := flag.Bool("alpha", false, "transparent background (png)")
 	pages := flag.String("pages", "", "page selection, e.g. 1-3,7 (default all)")
 	format := flag.String("format", "png", "output format: png or html")
+	cjkFont := flag.String("cjk-font", "", "TrueType/OpenType font or collection (.ttf/.otf/.ttc) for CJK text in non-embedded fonts")
+	maxMP := flag.Float64("max-megapixels", content.DefaultMaxPagePixels/1e6, "largest page (millions of pixels) rendered (png)")
 	flag.Parse()
 
 	if flag.NArg() < 1 {
@@ -29,19 +31,25 @@ func main() {
 		flag.PrintDefaults()
 		os.Exit(2)
 	}
+	if *cjkFont != "" {
+		if err := api.SetCJKFont(*cjkFont); err != nil {
+			fmt.Fprintln(os.Stderr, "p4wn:", err)
+			os.Exit(1)
+		}
+	}
 	input := flag.Arg(0)
 	outdir := "."
 	if flag.NArg() > 1 {
 		outdir = flag.Arg(1)
 	}
 
-	if err := run(input, outdir, *dpi, *gray, *alpha, *pages, *format); err != nil {
+	if err := run(input, outdir, *dpi, *gray, *alpha, int(*maxMP*1e6), *pages, *format); err != nil {
 		fmt.Fprintln(os.Stderr, "p4wn:", err)
 		os.Exit(1)
 	}
 }
 
-func run(input, outdir string, dpi float64, gray, alpha bool, pageSel, format string) error {
+func run(input, outdir string, dpi float64, gray, alpha bool, maxPixels int, pageSel, format string) error {
 	switch format {
 	case "png", "html":
 	default:
@@ -81,8 +89,9 @@ func run(input, outdir string, dpi float64, gray, alpha bool, pageSel, format st
 		return nil
 	}
 
-	opts := content.RenderOptions{DPI: dpi, Gray: gray, Alpha: alpha}
+	opts := content.RenderOptions{DPI: dpi, Gray: gray, Alpha: alpha, MaxPixels: maxPixels}
 	for _, n := range selected {
+		opts.Warn = func(err error) { fmt.Fprintf(os.Stderr, "p4wn: page %d: warning: %v\n", n+1, err) }
 		pix, err := content.RenderPage(context.Background(), doc, n, opts)
 		if err != nil {
 			return fmt.Errorf("page %d: %w", n+1, err)

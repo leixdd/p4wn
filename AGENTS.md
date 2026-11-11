@@ -31,7 +31,8 @@ user explicitly asks to fix them.
 │   ├── cmd/p4wn-server  HTTP API
 │   └── internal/
 │       ├── pdf          lexer/parser, xref, decrypt, page tree
-│       ├── filter       stream filters + predictors
+│       ├── filter       stream filters + predictors (incl. CCITT, JBIG2)
+│       ├── jbig2        JBIG2 decoder (generic/symbol/text regions)
 │       ├── graphics     matrices, paths, colors, pixmaps
 │       ├── render       Device, DrawDevice (PNG), HTMLDevice (SVG/HTML)
 │       ├── font         embedded fonts, ToUnicode, base-14

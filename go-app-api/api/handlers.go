@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,10 +19,13 @@ type Server struct {
 	store  *Store
 	pool   *Pool
 	limits Limits
+	token  string // bearer token; empty disables auth
 }
 
-func NewServer(store *Store, pool *Pool, limits Limits) *Server {
-	return &Server{store: store, pool: pool, limits: limits}
+// NewServer wires the handlers. A non-empty token requires
+// "Authorization: Bearer <token>" on every route except /healthz.
+func NewServer(store *Store, pool *Pool, limits Limits, token string) *Server {
+	return &Server{store: store, pool: pool, limits: limits, token: token}
 }
 
 // Handler returns the routed http.Handler.
@@ -37,7 +41,23 @@ func (s *Server) Handler() http.Handler {
 		w.WriteHeader(http.StatusOK)
 		io.WriteString(w, "ok\n")
 	})
-	return recoverMiddleware(mux)
+	return recoverMiddleware(authMiddleware(s.token, mux))
+}
+
+func authMiddleware(token string, next http.Handler) http.Handler {
+	if token == "" {
+		return next
+	}
+	want := []byte("Bearer " + token)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got := []byte(r.Header.Get("Authorization"))
+		if r.URL.Path != "/healthz" && subtle.ConstantTimeCompare(got, want) != 1 {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			writeError(w, http.StatusUnauthorized, "missing or invalid bearer token")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func recoverMiddleware(next http.Handler) http.Handler {
