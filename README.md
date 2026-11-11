@@ -41,6 +41,25 @@ Flags: `-ttl` (job retention, default 1h), `-workers`, `-page-workers`,
   `/healthz` requires `Authorization: Bearer <token>`, else 401. The webui
   forwards one with `go run testtools/webui -token <token>`.
 
+### S3 upload (optional)
+
+With `P4WN_S3_BUCKET` set, every rendered PNG page is also PUT to that
+bucket as `<key_prefix>-<page>.png` and the job status reports it as
+`"key"` on the page; a page whose upload fails (3 attempts) is `failed`.
+`key_prefix` is a job option (`[A-Za-z0-9_-]` segments separated by `/`,
+e.g. `materials/42`); it defaults to the job ID. HTML jobs are not uploaded.
+Objects are never deleted by p4wn (job TTL and `DELETE` only affect local
+files), so the credentials need `s3:PutObject` only.
+
+| Env | Meaning |
+|-----|---------|
+| `P4WN_S3_BUCKET` | bucket; unset = uploads off |
+| `P4WN_S3_ACCESS_KEY`, `P4WN_S3_SECRET_KEY` | required with the bucket |
+| `P4WN_S3_REGION` | default `us-east-1` |
+| `P4WN_S3_ENDPOINT` | default `https://s3.<region>.amazonaws.com`; e.g. `http://localhost:4566` for a local emulator |
+
+Requests are path-style (`<endpoint>/<bucket>/<key>`), SigV4-signed.
+
 Job directories left in `-data-dir` by a previous process (32-hex-char
 job-ID dirs only; other files and dotfiles are left alone) are removed at
 startup. The server sets a 5 min whole-request read timeout (50 MB upload
@@ -73,7 +92,7 @@ Async job model: upload a PDF, poll for status, fetch PNG pages or a single
 HTML document.
 
 ```
-POST   /v1/jobs                      multipart "file" + dpi|scale, pages, gray, alpha, format
+POST   /v1/jobs                      multipart "file" + dpi|scale, pages, gray, alpha, format, key_prefix, max_pages
 GET    /v1/jobs/{id}                 status + per-page progress (+ document_url for html)
 GET    /v1/jobs/{id}/pages/{n}.png   one rendered page (format=png)
 GET    /v1/jobs/{id}/document.html   self-contained scrollable HTML (format=html)
@@ -84,7 +103,8 @@ GET    /healthz
 
 Options (form field or query param): `dpi` (8–`-max-dpi`, default 150) **or**
 `scale` (dpi = 72·scale); `pages` like `1-3,7,9-` (default all); `gray` and
-`alpha` booleans (png); `format` = `png` (default) or `html`.
+`alpha` booleans (png); `format` = `png` (default) or `html`; `max_pages` fails the job before
+rendering when the document has more pages; `key_prefix` (see S3 upload).
 
 ### HTML output
 

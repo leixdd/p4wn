@@ -52,6 +52,14 @@ func main() {
 
 	pool := api.NewPool(store, *jobWorkers, *pageWorkers, limits.MaxPages, limits.MaxQueueDepth, *pageTimeout)
 	pool.MaxPagePixels = limits.MaxPagePixels
+	s3, err := api.S3FromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if s3 != nil {
+		pool.S3 = s3
+		log.Printf("uploading png pages to s3 bucket %q at %s", s3.Bucket, s3.Endpoint)
+	}
 	server := &http.Server{
 		Addr:              *addr,
 		Handler:           api.NewServer(store, pool, limits, *token).Handler(),

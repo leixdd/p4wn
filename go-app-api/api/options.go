@@ -51,10 +51,17 @@ type JobOptions struct {
 	Gray   bool         `json:"gray"`
 	Alpha  bool         `json:"alpha"`
 	Format OutputFormat `json:"format"`
+	// KeyPrefix names the S3 objects of a png job: "<KeyPrefix>-<page>.png".
+	// Empty = the job ID. Only used when the server has a bucket configured.
+	KeyPrefix string `json:"key_prefix,omitempty"`
+	// MaxPages fails the job before rendering when the document has more
+	// pages than this (0 = only the server limit applies).
+	MaxPages int `json:"max_pages,omitempty"`
 }
 
 // ParseJobOptions validates form/query values into JobOptions.
-// Accepted keys: dpi, scale (dpi = 72·scale), pages, gray, alpha, format.
+// Accepted keys: dpi, scale (dpi = 72·scale), pages, gray, alpha, format,
+// key_prefix, max_pages.
 func ParseJobOptions(get func(string) string, lim Limits) (JobOptions, error) {
 	opts := JobOptions{DPI: 150, Format: FormatPNG}
 	if s := get("dpi"); s != "" {
@@ -96,6 +103,15 @@ func ParseJobOptions(get func(string) string, lim Limits) (JobOptions, error) {
 		opts.Format = FormatHTML
 	default:
 		return opts, fmt.Errorf("invalid format %q (want png or html)", get("format"))
+	}
+	if s := get("max_pages"); s != "" {
+		if opts.MaxPages, err = strconv.Atoi(s); err != nil || opts.MaxPages < 1 {
+			return opts, fmt.Errorf("invalid max_pages %q", s)
+		}
+	}
+	opts.KeyPrefix = get("key_prefix")
+	if opts.KeyPrefix != "" && (len(opts.KeyPrefix) > 200 || !keyPrefixRe.MatchString(opts.KeyPrefix)) {
+		return opts, fmt.Errorf("invalid key_prefix (want [A-Za-z0-9_-] segments separated by /, max 200 chars)")
 	}
 	return opts, nil
 }
