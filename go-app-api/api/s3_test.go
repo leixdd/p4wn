@@ -44,7 +44,7 @@ func TestPNGJobUploadsPages(t *testing.T) {
 	defer fake.Close()
 
 	srv, _, pool := testServer(t)
-	pool.S3 = &S3{Endpoint: fake.URL, Region: "us-east-1", Bucket: "mat", AccessKey: "ak", SecretKey: "sk", Client: fake.Client()}
+	pool.S3 = &S3{Endpoint: fake.URL, Region: "us-east-1", Bucket: "bkt", AccessKey: "ak", SecretKey: "sk", Client: fake.Client()}
 	h := srv.Handler()
 	pdf := fixturePDF(t)
 
@@ -52,15 +52,15 @@ func TestPNGJobUploadsPages(t *testing.T) {
 		t.Fatalf("bad key_prefix: %d, want 400", res.StatusCode)
 	}
 
-	res := postJob(t, h, pdf, map[string]string{"dpi": "72", "pages": "1", "key_prefix": "materials/42"})
+	res := postJob(t, h, pdf, map[string]string{"dpi": "72", "pages": "1", "key_prefix": "docs/7"})
 	var created map[string]string
 	_ = readJSON(res.Body, &created)
 	v := waitDone(t, h, created["id"])
-	if v.Status != StatusDone || len(v.Pages) != 1 || v.Pages[0].Key != "materials/42-1.png" {
+	if v.Status != StatusDone || len(v.Pages) != 1 || v.Pages[0].Key != "docs/7-1.png" {
 		t.Fatalf("status=%s err=%s pages=%+v", v.Status, v.Error, v.Pages)
 	}
 	mu.Lock()
-	n := puts["/mat/materials/42-1.png"]
+	n := puts["/bkt/docs/7-1.png"]
 	mu.Unlock()
 	if n == 0 {
 		t.Fatalf("page not uploaded; puts=%v", puts)
