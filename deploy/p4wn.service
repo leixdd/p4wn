@@ -1,4 +1,4 @@
-# Sample systemd unit for p4wn-server on a small (2 vCPU / 2 GB) host.
+# Sample systemd unit for p4wn-server on e.g. a 2 vCPU / 2 GB host.
 #
 # Install:
 #   sudo useradd --system --no-create-home --shell /usr/sbin/nologin p4wn
@@ -9,8 +9,22 @@
 #   sudo systemctl enable --now p4wn
 #   (optional S3 upload: add P4WN_S3_BUCKET / P4WN_S3_ACCESS_KEY /
 #    P4WN_S3_SECRET_KEY / P4WN_S3_REGION to /etc/p4wn.env — see README)
+#   (upload limit: P4WN_MAX_UPLOAD_MB, default 100. With -workers 1 one job
+#    holds its whole PDF in memory next to the page pixmaps — at 100 MB this
+#    fits under MemoryMax below; raise MemoryMax before going much higher.)
+#   (page limit: P4WN_MAX_PAGES, default 1000. Pages render -page-workers at a
+#    time, so memory does not grow with it, but each page's PNG stays in
+#    /var/lib/p4wn until the job expires (-ttl, 1 h): budget disk for
+#    max pages x ~0.5 MB per job in flight.)
+#   (parallelism and page size: P4WN_WORKERS, P4WN_PAGE_WORKERS and
+#    P4WN_MAX_MEGAPIXELS in /etc/p4wn.env work too, but the flags on
+#    ExecStart below win — drop a flag there to set it from the env file.
+#    Worst case ~ workers x page-workers x 7 bytes x megapixel cap: 1 x 2 x
+#    ~560 MB at the default 80 MP fits under MemoryMax; see README "Sizing".)
+#   (browser uploads: add P4WN_TICKET_SECRET and P4WN_CORS_ORIGINS to
+#    /etc/p4wn.env and front the server with deploy/nginx.conf.sample)
 #
-# Port 8081: 8080 is taken by another service on the same network.
+# Port 8081 matches the Docker image; change as needed.
 
 [Unit]
 Description=p4wn PDF to PNG/HTML conversion API
@@ -24,7 +38,7 @@ StateDirectory=p4wn
 EnvironmentFile=/etc/p4wn.env
 # Go GC soft limit below MemoryMax so the heap is reclaimed before the cgroup OOM-kills
 Environment=GOMEMLIMIT=1200MiB
-ExecStart=/usr/local/bin/p4wn-server -addr 127.0.0.1:8081 -data-dir /var/lib/p4wn -workers 1 -page-workers 2 -max-dpi 300 -token ${P4WN_TOKEN}
+ExecStart=/usr/local/bin/p4wn-server -addr 127.0.0.1:8081 -data-dir /var/lib/p4wn -workers 1 -page-workers 2 -max-dpi 300
 Restart=always
 RestartSec=2
 MemoryMax=1500M
