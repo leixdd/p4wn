@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -110,5 +111,68 @@ func TestNewStoreRemovesStaleJobDirs(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 			t.Errorf("%s should be kept: %v", name, err)
 		}
+	}
+}
+
+func TestDefaultMaxUpload(t *testing.T) {
+	if got := DefaultLimits().MaxUploadBytes; got != 100<<20 {
+		t.Fatalf("default MaxUploadBytes = %d, want 100 MB", got)
+	}
+	if got, err := ParseMaxUploadMB(""); err != nil || got != 100<<20 {
+		t.Fatalf(`ParseMaxUploadMB("") = %d, %v; want 100 MB`, got, err)
+	}
+	if got := ReadTimeoutFor(100 << 20); got != 10*time.Minute {
+		t.Errorf("read timeout at 100 MB = %s, want 10m", got)
+	}
+	if got := ReadTimeoutFor(1 << 20); got != time.Minute {
+		t.Errorf("read timeout at 1 MB = %s, want the 1m floor", got)
+	}
+}
+
+func TestParseMaxUploadMB(t *testing.T) {
+	for in, want := range map[string]int64{"1": 1 << 20, " 250 ": 250 << 20, "1024": 1024 << 20} {
+		if got, err := ParseMaxUploadMB(in); err != nil || got != want {
+			t.Errorf("%q: %d, %v; want %d", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"0", "-5", "1025", "1.5", "100MB", "abc", "99999999999999999999"} {
+		if _, err := ParseMaxUploadMB(in); err == nil {
+			t.Errorf("%q: accepted, want error", in)
+		}
+	}
+}
+
+// A custom limit is honoured: a PDF of exactly the limit is accepted (the
+// multipart framing does not count), one byte more gets 413 naming the limit.
+func TestMaxUploadLimit(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(dir, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lim := DefaultLimits()
+	lim.MaxUploadBytes = 1 << 20
+	pool := NewPool(store, 1, 2, lim.MaxPages, lim.MaxQueueDepth, 30*time.Second)
+	t.Cleanup(pool.Shutdown)
+	h := NewServer(store, pool, lim, "").Handler()
+
+	// vec.pdf padded with trailing whitespace to exactly the limit
+	pdf := fixturePDF(t)
+	atLimit := append(append([]byte(nil), pdf...), bytes.Repeat([]byte{'\n'}, int(lim.MaxUploadBytes)-len(pdf))...)
+	if res := postJob(t, h, atLimit, map[string]string{"dpi": "72"}); res.StatusCode != http.StatusAccepted {
+		b, _ := io.ReadAll(res.Body)
+		t.Fatalf("PDF of exactly the limit: %d %s, want 202", res.StatusCode, b)
+	}
+
+	res := postJob(t, h, append(atLimit, '\n'), nil)
+	b, _ := io.ReadAll(res.Body)
+	if res.StatusCode != http.StatusRequestEntityTooLarge || !strings.Contains(string(b), "limit 1 MB") {
+		t.Fatalf("PDF one byte over: %d %s, want 413 naming the limit", res.StatusCode, b)
+	}
+
+	// a body far over the limit is cut off by the body reader, not read whole
+	res = postJob(t, h, bytes.Repeat([]byte{'x'}, 3<<20), nil)
+	if res.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("3 MB body: %d, want 413", res.StatusCode)
 	}
 }

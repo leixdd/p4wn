@@ -17,7 +17,7 @@ var indexHTML []byte
 
 func main() {
 	addr := flag.String("addr", ":3000", "listen address for the UI")
-	api := flag.String("api", "http://localhost:8080", "p4wn API base URL")
+	api := flag.String("api", "http://localhost:8081", "p4wn API base URL")
 	token := flag.String("token", "", "bearer token to forward to the API (match p4wn-server -token)")
 	flag.Parse()
 

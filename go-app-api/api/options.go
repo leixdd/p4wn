@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"p4wn/internal/content"
 	"p4wn/internal/font"
@@ -13,23 +14,128 @@ import (
 
 // Limits bound resource usage per request/job.
 type Limits struct {
-	MaxUploadBytes int64
-	MaxPages       int
+	MaxUploadBytes int64 // largest PDF accepted by POST /v1/jobs; server -max-upload-mb
+	MaxPages       int   // most pages one job renders; server -max-pages
 	MaxQueueDepth  int
 	MinDPI         float64
 	MaxDPI         float64
 	MaxPagePixels  int // per rendered page; server -max-megapixels
 }
 
+const (
+	// DefaultMaxUploadMB is the upload limit when neither -max-upload-mb nor
+	// P4WN_MAX_UPLOAD_MB is given. 1 MB = 2^20 bytes throughout.
+	DefaultMaxUploadMB = 100
+	// MaxUploadMBCap bounds -max-upload-mb: a job holds its whole input in
+	// memory while it runs, on top of the page pixmaps.
+	MaxUploadMBCap = 1024
+	// DefaultMaxPages is the per-job page limit when neither -max-pages nor
+	// P4WN_MAX_PAGES is given.
+	DefaultMaxPages = 1000
+	// MaxPagesCap bounds -max-pages: every selected page keeps a status entry
+	// (in memory and in GET /v1/jobs/{id}) and a PNG on disk until the job
+	// expires.
+	MaxPagesCap = 10000
+	// DefaultPageWorkers is the per-job page concurrency when neither
+	// -page-workers nor P4WN_PAGE_WORKERS is given.
+	DefaultPageWorkers = 4
+	// WorkersCap bounds -workers and -page-workers. Rendering is CPU-bound,
+	// so counts far above the core count only add memory.
+	WorkersCap = 256
+	// MaxMegapixelsCap bounds -max-megapixels (graphics.MaxPixmapDim²).
+	MaxMegapixelsCap = 400
+	// uploadSecondsPerMB sizes the server read timeout: 6 s/MB ≈ 1.4 Mbit/s,
+	// the slowest client a full-size upload must still work for.
+	uploadSecondsPerMB = 6
+	// multipartSlack is what a POST /v1/jobs body may carry beyond the file:
+	// multipart framing and the option fields.
+	multipartSlack = 64 << 10
+)
+
 func DefaultLimits() Limits {
 	return Limits{
-		MaxUploadBytes: 50 << 20,
-		MaxPages:       500,
+		MaxUploadBytes: DefaultMaxUploadMB << 20,
+		MaxPages:       DefaultMaxPages,
 		MaxQueueDepth:  100,
 		MinDPI:         8,
 		MaxDPI:         300, // server -max-dpi; Letter @1200 dpi needs ~1 GB of pixmaps
 		MaxPagePixels:  content.DefaultMaxPagePixels,
 	}
+}
+
+// ParseMaxUploadMB validates a -max-upload-mb / P4WN_MAX_UPLOAD_MB value
+// (whole MB, 1..MaxUploadMBCap) and returns it in bytes. Empty = the default.
+func ParseMaxUploadMB(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return DefaultMaxUploadMB << 20, nil
+	}
+	mb, err := strconv.Atoi(s)
+	if err != nil || mb < 1 || mb > MaxUploadMBCap {
+		return 0, fmt.Errorf("%q is not a whole number of MB in [1, %d]", s, MaxUploadMBCap)
+	}
+	return int64(mb) << 20, nil
+}
+
+// ParseMaxPages validates a -max-pages / P4WN_MAX_PAGES value (whole number,
+// 1..MaxPagesCap). Empty = the default.
+func ParseMaxPages(s string) (int, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return DefaultMaxPages, nil
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 1 || n > MaxPagesCap {
+		return 0, fmt.Errorf("%q is not a whole number of pages in [1, %d]", s, MaxPagesCap)
+	}
+	return n, nil
+}
+
+// ParseWorkers validates a -workers / -page-workers value (or its
+// P4WN_WORKERS / P4WN_PAGE_WORKERS fallback): a whole number in
+// [1, WorkersCap]. Empty = def.
+func ParseWorkers(s string, def int) (int, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 1 || n > WorkersCap {
+		return 0, fmt.Errorf("%q is not a whole number in [1, %d]", s, WorkersCap)
+	}
+	return n, nil
+}
+
+// ParseMaxMegapixels validates a -max-megapixels / P4WN_MAX_MEGAPIXELS value
+// (millions of pixels, in (0, MaxMegapixelsCap]) and returns it in pixels.
+// Empty = content.DefaultMaxPagePixels.
+func ParseMaxMegapixels(s string) (int, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return content.DefaultMaxPagePixels, nil
+	}
+	mp, err := strconv.ParseFloat(s, 64)
+	// !(…) also rejects NaN; under one pixel would read as 0 = the default
+	if err != nil || !(mp > 0 && mp <= MaxMegapixelsCap) || int(mp*1e6) < 1 {
+		return 0, fmt.Errorf("%q is not a number of megapixels in (0, %d]", s, MaxMegapixelsCap)
+	}
+	return int(mp * 1e6), nil
+}
+
+// ReadTimeoutFor is the server's whole-request read timeout for an upload
+// limit: the full-size upload at ~1.4 Mbit/s (6 s/MB; 100 MB → 10 min), at
+// least 1 min.
+func ReadTimeoutFor(maxUploadBytes int64) time.Duration {
+	mb := (maxUploadBytes + 1<<20 - 1) >> 20
+	return max(time.Minute, time.Duration(mb*uploadSecondsPerMB)*time.Second)
+}
+
+// formatBytes prints a size as "N MB" when it is whole MB, else in bytes.
+func formatBytes(n int64) string {
+	if n%(1<<20) == 0 {
+		return fmt.Sprintf("%d MB", n>>20)
+	}
+	return fmt.Sprintf("%d bytes", n)
 }
 
 // SetCJKFont configures the process-wide fallback font for CJK text in

@@ -81,3 +81,32 @@ func TestParseJobOptions(t *testing.T) {
 		t.Error("invalid format accepted")
 	}
 }
+
+func TestParseWorkers(t *testing.T) {
+	for in, want := range map[string]int{"": 3, "1": 1, " 8 ": 8, "256": 256} {
+		if got, err := ParseWorkers(in, 3); err != nil || got != want {
+			t.Errorf("ParseWorkers(%q, 3) = %d, %v; want %d", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"0", "-1", "257", "1.5", "abc", "4cpus", "99999999999999999999"} {
+		if _, err := ParseWorkers(in, 3); err == nil {
+			t.Errorf("ParseWorkers(%q) accepted", in)
+		}
+	}
+}
+
+func TestParseMaxMegapixels(t *testing.T) {
+	if got := DefaultLimits().MaxPagePixels; got != 80_000_000 {
+		t.Fatalf("default MaxPagePixels = %d, want 80 MP", got)
+	}
+	for in, want := range map[string]int{"": 80_000_000, "20": 20_000_000, " 0.5 ": 500_000, "400": 400_000_000} {
+		if got, err := ParseMaxMegapixels(in); err != nil || got != want {
+			t.Errorf("ParseMaxMegapixels(%q) = %d, %v; want %d", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"0", "-1", "400.1", "1e-9", "NaN", "Inf", "abc", "80MP"} {
+		if _, err := ParseMaxMegapixels(in); err == nil {
+			t.Errorf("ParseMaxMegapixels(%q) accepted", in)
+		}
+	}
+}
