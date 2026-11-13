@@ -7,3 +7,4 @@ scripts
 testdata
 testtools
 **/*_test.go
+.secrets

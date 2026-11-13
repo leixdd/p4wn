@@ -58,10 +58,10 @@ Runbook / API / smoke: [`README.md`](README.md).
 ## How to run
 
 ```sh
-go run p4wn/cmd/p4wn-server -addr :8080 -data-dir ./data
+go run p4wn/cmd/p4wn-server -addr :8081 -data-dir ./data
 go run p4wn/cmd/p4wn -dpi 150 -pages 1-3 input.pdf outdir/
 go run p4wn/cmd/p4wn -format html -pages 1-3 input.pdf outdir/
-go run testtools/webui   # UI on :3000, proxies to API :8080
+go run testtools/webui   # UI on :3000, proxies to API :8081
 ```
 
 API: async `POST /v1/jobs` → poll `GET /v1/jobs/{id}` → fetch pages / `document.html` / zip.

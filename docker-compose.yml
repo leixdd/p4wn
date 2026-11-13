@@ -1,0 +1,22 @@
+# p4wn-server (PDF → PNG). Optional settings: copy .secrets/.env.example to .secrets/.env.
+#   docker compose up --build -d
+# Optional CJK font: put it in .secrets/fonts/ and set P4WN_CJK_FONT=/fonts/<file>.
+
+services:
+  p4wn:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - path: .secrets/.env
+        required: false
+    ports:
+      - "${P4WN_PORT:-8081}:8081"
+    volumes:
+      - p4wn-data:/data
+      - ./.secrets/fonts:/fonts:ro
+    # Optional: lets the container reach services on the Docker host (Linux; Docker Desktop has it built in)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  p4wn-data:

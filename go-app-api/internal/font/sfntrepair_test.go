@@ -1,17 +1,11 @@
 package font
 
 import (
-	"os"
 	"testing"
 )
 
 func TestRepairSfntCMapCambriaSubset(t *testing.T) {
-	// Extract FontFile2 for Cambria-Bold from the user's test PDF if present.
-	pdfPath := "../../../data/c0617c624672eb597c969ee5f4fe039a/input.pdf"
-	if _, err := os.Stat(pdfPath); err != nil {
-		t.Skip("user test PDF not present")
-	}
-	// Prefer unit-level: build a tiny broken-cmap TTF from a known-good font
+	// Unit-level: build a tiny broken-cmap TTF from a known-good font
 	// by zeroing the cmap and ensuring repair restores parseability.
 	src, data, err := newSfntSource(mustGoRegular(t))
 	if err != nil {

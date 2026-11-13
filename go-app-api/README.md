@@ -92,12 +92,12 @@ above this file):
 ```sh
 go run p4wn/cmd/p4wn -dpi 150 -pages 1-3,7 input.pdf outdir/          # PNG
 go run p4wn/cmd/p4wn -format html -pages 1-3 input.pdf outdir/        # HTML
-go run p4wn/cmd/p4wn-server -addr :8080 -data-dir ./data              # server
+go run p4wn/cmd/p4wn-server -addr :8081 -data-dir ./data              # server
 go run testtools/imgdiff a.png b.png                                        # tools
 ```
 
 ```
-POST   /v1/jobs                      multipart "file" + dpi|scale, pages, gray, alpha, format
+POST   /v1/jobs                      multipart "file" + dpi|scale, pages, gray, alpha, format, key_prefix, max_pages
 GET    /v1/jobs/{id}                 job status incl. per-page progress
 GET    /v1/jobs/{id}/pages/{n}.png   rendered page (format=png)
 GET    /v1/jobs/{id}/document.html   scrollable HTML document (format=html)
@@ -105,6 +105,9 @@ GET    /v1/jobs/{id}/archive.zip     all pages zipped / document.html
 DELETE /v1/jobs/{id}
 GET    /healthz
 ```
+
+Option details, the optional S3 upload of rendered pages (`P4WN_S3_*`, `key_prefix`)
+and `max_pages`: see the [root README](../README.md) ("API" and "S3 upload").
 
 Jobs are processed asynchronously by a worker pool; pages within a document
 render in parallel. Per-page panics and timeouts fail that page only (job

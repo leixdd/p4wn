@@ -26,8 +26,11 @@ type Pool struct {
 	// MaxPagePixels caps each PNG page's pixel area (0 = content default).
 	// Set before the first Enqueue.
 	MaxPagePixels int
-	wg            sync.WaitGroup
-	cancel        context.CancelFunc
+	// S3, when non-nil, receives every rendered PNG page; a failed upload
+	// fails the page. Set before the first Enqueue.
+	S3     *S3
+	wg     sync.WaitGroup
+	cancel context.CancelFunc
 }
 
 func NewPool(store *Store, jobWorkers, pageWorkers, maxPages int, queueDepth int, pageTimeout time.Duration) *Pool {
@@ -105,6 +108,10 @@ func (p *Pool) runJob(ctx context.Context, id string) {
 	doc, err := openDoc(data)
 	if err != nil {
 		fail(err.Error())
+		return
+	}
+	if m := snap.Options.MaxPages; m > 0 && doc.NumPages() > m {
+		fail(fmt.Sprintf("document has %d pages, limit is %d", doc.NumPages(), m))
 		return
 	}
 	selected, err := ParsePageRanges(snap.Options.Pages, doc.NumPages())
@@ -295,6 +302,23 @@ func (p *Pool) renderPage(ctx context.Context, doc *pdf.Document, job Job, page 
 		res.Status = PageFailed
 		res.Error = err.Error()
 		return res
+	}
+	if p.S3 != nil {
+		prefix := job.Options.KeyPrefix
+		if prefix == "" {
+			prefix = job.ID
+		}
+		key := fmt.Sprintf("%s-%d.png", prefix, page+1)
+		data, err := os.ReadFile(name)
+		if err == nil {
+			err = p.S3.Put(ctx, key, "image/png", data)
+		}
+		if err != nil {
+			res.Status = PageFailed
+			res.Error = err.Error()
+			return res
+		}
+		res.Key = key
 	}
 	res.Status = PageDone
 	res.Width, res.Height = pix.W, pix.H

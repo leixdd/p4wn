@@ -1,0 +1,92 @@
+# Sample nginx front for p4wn-server on its own domain (HTTPS), for
+# browser-direct uploads with tickets (README "Browser-direct uploads with
+# tickets"). Placeholders: convert.example.com, the certificate paths, the
+# trusted backend addresses under "location /", and the upstream address.
+#
+#   POST /v1/jobs (+ its CORS preflight)  public, rate-limited per client IP
+#   GET  /healthz                         public
+#   everything else (status, pages,       trusted backends only; they also
+#   archive.zip, DELETE)                  need the static bearer token
+#
+# CORS is answered by p4wn itself (P4WN_CORS_ORIGINS): do NOT add
+# Access-Control-* headers here as well. nginx's own error answers (413 from
+# client_max_body_size, 429 from limit_req) carry no CORS headers, so a
+# browser sees them as network errors: keep client_max_body_size above
+# p4wn's -max-upload-mb so p4wn answers 413 itself.
+#
+# Goes in the http {} context, e.g. /etc/nginx/conf.d/p4wn.conf.
+
+# Uploads per client IP: 10 per minute, bursts of 5. Tune to your users;
+# clients behind one NAT share a bucket.
+limit_req_zone $binary_remote_addr zone=p4wn_upload:10m rate=10r/m;
+# Concurrent uploads per client IP.
+limit_conn_zone $binary_remote_addr zone=p4wn_conn:10m;
+
+upstream p4wn {
+    server 127.0.0.1:8081;    # p4wn-server -addr (deploy/p4wn.service)
+    keepalive 4;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name convert.example.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name convert.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/convert.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/convert.example.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+
+    proxy_http_version 1.1;
+    proxy_set_header   Connection "";
+    proxy_set_header   Host $host;
+
+    # Only the upload route takes a large body; everything else stays small.
+    client_max_body_size 1m;
+
+    # Public upload route: tickets (browsers) or the static token (backends).
+    location = /v1/jobs {
+        limit_except POST OPTIONS { deny all; }
+        limit_req  zone=p4wn_upload burst=5 nodelay;
+        limit_conn p4wn_conn 2;
+        limit_req_status  429;
+        limit_conn_status 429;
+
+        # -max-upload-mb (default 100) plus room for the multipart framing,
+        # so p4wn rejects oversize PDFs itself (readable 413 with CORS).
+        client_max_body_size 101m;
+        # Stream the body to p4wn as it arrives: no temp copy here, and
+        # p4wn refuses a bad ticket before the upload is buffered anywhere.
+        proxy_request_buffering off;
+
+        # Sized like p4wn's read timeout (6 s per MB of -max-upload-mb, 10 min
+        # at 100 MB). client_body_timeout is per read from the client.
+        client_body_timeout 60s;
+        proxy_send_timeout  600s;
+        proxy_read_timeout  600s;
+
+        proxy_pass http://p4wn;
+    }
+
+    location = /healthz {
+        proxy_pass http://p4wn;
+    }
+
+    # Status, pages, archive, delete: trusted backends only.
+    location / {
+        allow 192.0.2.10;      # placeholder: backend server address
+        allow 2001:db8::10;    # placeholder: backend server address (IPv6)
+        deny  all;
+
+        # archive.zip of a large job can take a while to stream
+        proxy_read_timeout 600s;
+        proxy_pass http://p4wn;
+    }
+}

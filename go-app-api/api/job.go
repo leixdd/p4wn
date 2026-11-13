@@ -32,6 +32,8 @@ type PageResult struct {
 	Height int        `json:"height,omitempty"`
 	Error  string     `json:"error,omitempty"`
 	URL    string     `json:"url,omitempty"`
+	// Key is the S3 object key the page was stored under (bucket configured).
+	Key string `json:"key,omitempty"`
 	// Warnings lists content left out of a rendered page (e.g. an image in
 	// an unsupported codec variant); the page itself still succeeded.
 	Warnings []string `json:"warnings,omitempty"`

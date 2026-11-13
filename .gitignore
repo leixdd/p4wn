@@ -1,0 +1,4 @@
+.secrets/.env
+.secrets/fonts/*
+!.secrets/fonts/.gitkeep
+data/
