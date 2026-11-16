@@ -1,6 +1,8 @@
 # syntax=docker/dockerfile:1.7
 
-FROM golang:1.25-alpine AS build
+# Build natively and cross-compile (Go under QEMU emulation segfaults).
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS build
+ARG TARGETOS TARGETARCH
 WORKDIR /src/go-app-api
 # Build the p4wn module on its own: go.work also pulls in testtools, which the
 # server does not need (and which .dockerignore keeps out of the context).
@@ -12,7 +14,7 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY go-app-api/ ./
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/p4wn-server ./cmd/p4wn-server \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/p4wn-server ./cmd/p4wn-server \
     && mkdir -p /out/data
 
 FROM gcr.io/distroless/static-debian12:nonroot
