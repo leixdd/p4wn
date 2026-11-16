@@ -40,12 +40,13 @@ timeout, default 60s), plus:
   (`.ttf`, `.otf` incl. CID-keyed CFF, `.ttc`; not variable/CFF2, WOFF or
   Type1) used for CJK text whose font is not embedded; in a collection the
   first face with kana and kanji is used. Without it such text is blank in
-  PNG output. Tested with macOS Hiragino (`ヒラギノ角ゴシック W3.ttc`, 7 MB;
-  `ヒラギノ明朝 ProN.ttc`, 18 MB) and `Arial Unicode.ttf` (22 MB); on Debian,
-  `fonts-ipaexfont` / `fonts-noto-cjk` are the usual choices (not tested
-  here). The whole file is held in memory for the process lifetime. The CLI
-  takes the same flag. The server falls back to `P4WN_CJK_FONT` when the
-  flag is not given.
+  PNG output. Tested with IPAex Gothic (`ipaexg.ttf`, 6 MB; IPA Font
+  License, redistributable; the [Docker image](#docker) ships it as the
+  default), macOS Hiragino (`ヒラギノ角ゴシック W3.ttc`, 7 MB;
+  `ヒラギノ明朝 ProN.ttc`, 18 MB) and `Arial Unicode.ttf` (22 MB);
+  `fonts-noto-cjk` is not tested here. The whole file is held in memory for
+  the process lifetime. The CLI takes the same flag. The server falls back
+  to `P4WN_CJK_FONT` when the flag is not given.
 - `-token` (default empty = no auth): when set, every route except
   `/healthz` requires `Authorization: Bearer <token>`, else 401. The webui
   forwards one with `go run testtools/webui -token <token>`. The server
@@ -223,11 +224,24 @@ and read timeout are logged at startup.
 ```sh
 docker build -t p4wn .
 docker run --rm -p 8081:8081 -v p4wn-data:/data p4wn -token "$P4WN_TOKEN"
+
+# another platform, e.g. linux/amd64 from an arm64 machine
+docker buildx build --platform linux/amd64 --load -t p4wn .
 ```
 
 Static `CGO_ENABLED=0` binary on distroless `static:nonroot`, listening on
 `:8081` with `-data-dir /data` (owned by the nonroot user); extra flags are
 appended after the image name. Only `go-app-api/` is built (`GOWORK=off`).
+The build stage runs on the build machine and cross-compiles for the target
+(`GOOS`/`GOARCH`), so other platforms build without QEMU emulation.
+`.secrets/`, `data/`, `testdata/` and `testtools/` are not in the build
+context (`.dockerignore`).
+
+CJK text works out of the box: the image includes IPAex Gothic
+(`/usr/share/fonts/ipaexg.ttf`, from Alpine's `font-ipaex`) and sets
+`P4WN_CJK_FONT` to it. Settings are read at run time, not baked in: pass them
+with `-e`/`--env-file` or compose `env_file`. Note that `docker run --env-file`
+keeps quotes in values literally, while compose strips them.
 
 With compose (`docker-compose.yml`), settings come from `.secrets/.env`
 (optional; copy [`.secrets/.env.example`](.secrets/.env.example)):
@@ -236,9 +250,9 @@ With compose (`docker-compose.yml`), settings come from `.secrets/.env`
 the `P4WN_S3_*` variables, `P4WN_TICKET_SECRET` and `P4WN_CORS_ORIGINS`
 above.
 `P4WN_PORT` in the shell (default 8081) sets the host port. Job data is in the
-`p4wn-data` volume. For CJK text put a font in `.secrets/fonts/` (git-ignored,
-mounted read-only at `/fonts`, must be readable by uid 65532) and set
-`P4WN_CJK_FONT=/fonts/<file>`.
+`p4wn-data` volume. CJK text uses the built-in IPAex font; to use another font,
+put it in `.secrets/fonts/` (git-ignored, mounted read-only at `/fonts`, must be
+readable by uid 65532) and set `P4WN_CJK_FONT=/fonts/<file>`.
 
 ```sh
 docker compose up --build -d
