@@ -11,6 +11,9 @@ ENV GOWORK=off
 COPY go-app-api/go.mod go-app-api/go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
+# Default CJK fallback font: IPAex Gothic (IPA Font License, redistributable).
+RUN apk add --no-cache font-ipaex
+
 COPY go-app-api/ ./
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
@@ -19,6 +22,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/p4wn-server /p4wn-server
+COPY --from=build /usr/share/fonts/ipaexfont/ipaexg.ttf /usr/share/fonts/ipaexg.ttf
+# Override with P4WN_CJK_FONT or -cjk-font (e.g. a mounted font).
+ENV P4WN_CJK_FONT=/usr/share/fonts/ipaexg.ttf
 # job artifacts; owned by distroless "nonroot" (65532) so the server can write
 COPY --from=build --chown=65532:65532 /out/data /data
 USER nonroot:nonroot
